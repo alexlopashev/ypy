@@ -1,11 +1,10 @@
 use pyo3::exceptions::{PyAssertionError, PyException};
 use pyo3::types::PyBytes;
 use pyo3::{create_exception, prelude::*};
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::mem::ManuallyDrop;
 use std::ops::{Deref, DerefMut};
-use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 use yrs::updates::decoder::Decode;
 use yrs::updates::encoder::{Encode, Encoder};
 use yrs::{
@@ -13,6 +12,7 @@ use yrs::{
     StateVector, Update,
 };
 use yrs::{ReadTxn, TransactionMut};
+use yrs::sync::Error;
 
 create_exception!(
     y_py,
@@ -112,18 +112,21 @@ impl YTransactionInner {
 
 #[pyclass(unsendable)]
 pub struct YTransaction {
-    inner: Rc<RefCell<YTransactionInner>>,
+    inner: Arc<Mutex<YTransactionInner>>,
     committed: bool,
 }
 
 impl YTransaction {
-    pub fn new(txn: Rc<RefCell<YTransactionInner>>) -> Self {
+    pub fn new(txn: Arc<Mutex<YTransactionInner>>) -> Self {
+        let guard = txn.lock().map_err(|e| {
+            PyException::new_err(format!("Mutex lock error: {:?}", e))
+        }).unwrap();
         YTransaction {
             inner: txn.clone(),
-            committed: txn.borrow().committed,
+            committed: guard.committed,
         }
     }
-    pub fn get_inner(&self) -> Rc<RefCell<YTransactionInner>> {
+    pub fn get_inner(&self) -> Arc<Mutex<YTransactionInner>> {
         self.inner.clone()
     }
 
@@ -136,7 +139,9 @@ impl YTransaction {
         F: FnOnce(&mut YTransactionInner) -> R,
     {
         let inner = self.get_inner();
-        let mut txn = inner.borrow_mut();
+        let mut txn = inner.lock().map_err(|e| {
+            PyException::new_err(format!("Mutex lock error: {:?}", e))
+        })?;
         if txn.committed {
             Err(self.raise_alread_committed())
         } else {
@@ -149,12 +154,20 @@ impl YTransaction {
 impl YTransaction {
     #[getter]
     pub fn before_state(&mut self) -> PyObject {
-        self.get_inner().borrow_mut().before_state()
+        let binding = self.get_inner();
+        let mut guard = binding.lock().map_err(|e| {
+            PyException::new_err(format!("Mutex lock error: {:?}", e))
+        }).unwrap();
+        guard.before_state()
     }
 
     pub fn commit(&mut self) -> PyResult<()> {
         if !self.committed {
-            self.get_inner().borrow_mut().commit();
+            let binding = self.get_inner();
+            let mut guard = binding.lock().map_err(|e| {
+                PyException::new_err(format!("Mutex lock error: {:?}", e))
+            })?;
+            guard.commit();
             self.committed = true;
             Ok(())
         } else {
@@ -191,7 +204,11 @@ impl YTransaction {
     /// ```
 
     pub fn state_vector_v1(&self) -> PyObject {
-        let sv = self.get_inner().borrow().state_vector();
+        let binding = self.get_inner();
+        let guard = binding.lock().map_err(|e| {
+            PyException::new_err(format!("Mutex lock error: {:?}", e))
+        }).unwrap();
+        let sv = guard.state_vector();
         let payload = sv.encode_v1();
         Python::with_gil(|py| PyBytes::new(py, &payload).into())
     }
@@ -230,7 +247,11 @@ impl YTransaction {
         } else {
             StateVector::default()
         };
-        self.get_inner().borrow_mut().encode_diff(&sv, &mut encoder);
+        let binding = self.get_inner();
+        let guard = binding.lock().map_err(|e| {
+            PyException::new_err(format!("Mutex lock error: {:?}", e))
+        })?;
+        guard.encode_diff(&sv, &mut encoder);
         let bytes: PyObject = Python::with_gil(|py| PyBytes::new(py, &encoder.to_vec()).into());
         Ok(bytes)
     }
@@ -264,7 +285,11 @@ impl YTransaction {
         let mut decoder = DecoderV1::from(diff.as_slice());
         let update =
             Update::decode(&mut decoder).map_err(|e| EncodingException::new_err(e.to_string()))?;
-        match self.get_inner().borrow_mut().apply_update(update) {
+        let binding = self.get_inner();
+        let mut guard = binding.lock().map_err(|e| {
+            PyException::new_err(format!("Mutex lock error: {:?}", e))
+        })?;
+        match guard.apply_update(update) {
             Ok(_) => Ok(()),
             Err(e) => Err(PyException::new_err(format!("{:?}", e))),
         }

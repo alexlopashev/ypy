@@ -2,10 +2,9 @@ use crate::shared_types::{ObservationId, TypeWithDoc};
 use crate::y_doc::{WithDoc, YDocInner};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
-use std::cell::RefCell;
 use std::mem::ManuallyDrop;
 use std::ops::Deref;
-use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 use yrs::types::xml::{TreeWalker, Xml, XmlEvent, XmlTextEvent};
 use yrs::types::{DeepObservable, EntryChange, Path, PathSegment};
 use yrs::XmlFragmentRef;
@@ -33,13 +32,13 @@ use crate::y_transaction::{YTransaction, YTransactionInner};
 pub struct YXmlElement(pub TypeWithDoc<XmlElementRef>);
 
 impl WithDoc<YXmlElement> for XmlElementRef {
-    fn with_doc(self, doc: Rc<RefCell<YDocInner>>) -> YXmlElement {
+    fn with_doc(self, doc: Arc<Mutex<YDocInner>>) -> YXmlElement {
         YXmlElement(TypeWithDoc::new(self, doc))
     }
 }
 
 impl YXmlElement {
-    fn new(v: XmlElementRef, doc: Rc<RefCell<YDocInner>>) -> Self {
+    fn new(v: XmlElementRef, doc: Arc<Mutex<YDocInner>>) -> Self {
         YXmlElement(TypeWithDoc::new(v, doc))
     }
 }
@@ -280,13 +279,13 @@ impl YXmlElement {
 pub struct YXmlText(pub TypeWithDoc<XmlTextRef>);
 
 impl WithDoc<YXmlText> for XmlTextRef {
-    fn with_doc(self, doc: Rc<RefCell<YDocInner>>) -> YXmlText {
+    fn with_doc(self, doc: Arc<Mutex<YDocInner>>) -> YXmlText {
         YXmlText(TypeWithDoc::new(self, doc))
     }
 }
 
 impl YXmlText {
-    fn new(v: XmlTextRef, doc: Rc<RefCell<YDocInner>>) -> Self {
+    fn new(v: XmlTextRef, doc: Arc<Mutex<YDocInner>>) -> Self {
         YXmlText(TypeWithDoc::new(v, doc))
     }
 }
@@ -460,13 +459,13 @@ impl YXmlText {
 pub struct YXmlFragment(pub TypeWithDoc<XmlFragmentRef>);
 
 impl WithDoc<YXmlFragment> for XmlFragmentRef {
-    fn with_doc(self, doc: Rc<RefCell<YDocInner>>) -> YXmlFragment {
+    fn with_doc(self, doc: Arc<Mutex<YDocInner>>) -> YXmlFragment {
         YXmlFragment(TypeWithDoc::new(self, doc))
     }
 }
 
 impl YXmlFragment {
-    fn new(v: XmlFragmentRef, doc: Rc<RefCell<YDocInner>>) -> Self {
+    fn new(v: XmlFragmentRef, doc: Arc<Mutex<YDocInner>>) -> Self {
         YXmlFragment(TypeWithDoc::new(v, doc))
     }
 }
@@ -691,7 +690,7 @@ impl YXmlTreeWalker {
 #[pyclass(unsendable)]
 pub struct YXmlEvent {
     inner: *const XmlEvent,
-    doc: Rc<RefCell<YDocInner>>,
+    doc: Arc<Mutex<YDocInner>>,
     txn: *const TransactionMut<'static>,
 
     target: Option<PyObject>,
@@ -699,7 +698,7 @@ pub struct YXmlEvent {
     keys: Option<PyObject>,
 }
 impl YXmlEvent {
-    pub fn new(event: &XmlEvent, txn: &TransactionMut, doc: Rc<RefCell<YDocInner>>) -> Self {
+    pub fn new(event: &XmlEvent, txn: &TransactionMut, doc: Arc<Mutex<YDocInner>>) -> Self {
         let inner = event as *const XmlEvent;
         // HACK: get rid of lifetime
         let txn = unsafe { std::mem::transmute::<&TransactionMut, &TransactionMut<'static>>(txn) };
@@ -810,7 +809,7 @@ impl YXmlEvent {
 #[pyclass(unsendable)]
 pub struct YXmlTextEvent {
     inner: *const XmlTextEvent,
-    doc: Rc<RefCell<YDocInner>>,
+    doc: Arc<Mutex<YDocInner>>,
     txn: *const TransactionMut<'static>,
 
     target: Option<PyObject>,
@@ -819,7 +818,7 @@ pub struct YXmlTextEvent {
 }
 
 impl YXmlTextEvent {
-    pub fn new(event: &XmlTextEvent, txn: &TransactionMut, doc: Rc<RefCell<YDocInner>>) -> Self {
+    pub fn new(event: &XmlTextEvent, txn: &TransactionMut, doc: Arc<Mutex<YDocInner>>) -> Self {
         let inner = event as *const XmlTextEvent;
         // HACK: get rid of lifetime
         let txn = unsafe { std::mem::transmute::<&TransactionMut, &TransactionMut<'static>>(txn) };
@@ -924,7 +923,7 @@ impl YXmlTextEvent {
 
 // XML Type Conversions
 impl WithDocToPython for XmlOut {
-    fn with_doc_into_py(self, doc: Rc<RefCell<YDocInner>>, py: Python) -> PyObject {
+    fn with_doc_into_py(self, doc: Arc<Mutex<YDocInner>>, py: Python) -> PyObject {
         match self {
             XmlOut::Element(v) => v.with_doc(doc).into_py(py),
             XmlOut::Text(v) => v.with_doc(doc).into_py(py),
@@ -934,7 +933,7 @@ impl WithDocToPython for XmlOut {
 }
 
 impl WithDocToPython for &EntryChange {
-    fn with_doc_into_py(self, doc: Rc<RefCell<YDocInner>>, py: Python) -> PyObject {
+    fn with_doc_into_py(self, doc: Arc<Mutex<YDocInner>>, py: Python) -> PyObject {
         let result = PyDict::new(py);
         let action = "action";
         match self {

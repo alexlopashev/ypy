@@ -15,6 +15,7 @@ use std::{
     ops::{Deref, DerefMut},
     rc::Rc,
 };
+use std::sync::{Arc, Mutex};
 use yrs::types::TypeRef;
 use yrs::Subscription;
 
@@ -121,17 +122,20 @@ impl<'a> YPyType<'a> {
 #[derive(Clone)]
 pub struct TypeWithDoc<T> {
     pub inner: T,
-    pub doc: Rc<RefCell<YDocInner>>,
+    pub doc: Arc<Mutex<YDocInner>>,
 }
 
 impl<T> TypeWithDoc<T> {
-    pub fn new(inner: T, doc: Rc<RefCell<YDocInner>>) -> Self {
+    pub fn new(inner: T, doc: Arc<Mutex<YDocInner>>) -> Self {
         Self { inner, doc }
     }
 
-    fn get_transaction(&self) -> Rc<RefCell<YTransactionInner>> {
-        let doc = self.doc.clone();
-        let txn = doc.borrow_mut().begin_transaction();
+    fn get_transaction(&self) -> Arc<Mutex<YTransactionInner>> {
+        let binding = self.doc.clone();
+        let mut doc = binding.lock().map_err(|e| {
+            PyException::new_err(format!("Mutex lock error: {:?}", e))
+        }).unwrap();
+        let txn = doc.begin_transaction();
         txn
     }
 
@@ -139,8 +143,10 @@ impl<T> TypeWithDoc<T> {
     where
         F: FnOnce(&YTransactionInner) -> R,
     {
-        let txn = self.get_transaction();
-        let mut txn = txn.borrow_mut();
+        let binding = self.get_transaction();
+        let mut txn = binding.lock().map_err(|e| {
+            PyException::new_err(format!("Mutex lock error: {:?}", e))
+        }).unwrap();
         f(&mut txn)
     }
 }

@@ -1,7 +1,5 @@
-use std::cell::RefCell;
-use std::rc::Rc;
-use std::rc::Weak;
-
+use std::sync::{Arc, Mutex, Weak};
+use pyo3::exceptions::PyException;
 use crate::shared_types::ObservationId;
 use crate::y_array::YArray;
 use crate::y_map::YMap;
@@ -16,53 +14,66 @@ use yrs::updates::encoder::Encode;
 use yrs::Doc;
 use yrs::OffsetKind;
 use yrs::Options;
+use yrs::sync::Error;
 use yrs::Transact;
 use yrs::TransactionCleanupEvent;
 use yrs::TransactionMut;
 
 pub trait WithDoc<T> {
-    fn with_doc(self, doc: Rc<RefCell<YDocInner>>) -> T;
+    fn with_doc(self, doc: Arc<Mutex<YDocInner>>) -> T;
 }
 pub trait WithTransaction {
-    fn get_doc(&self) -> Rc<RefCell<YDocInner>>;
+    fn get_doc(&self) -> Arc<Mutex<YDocInner>>;
 
     fn with_transaction<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&YTransactionInner) -> R,
     {
         let txn = self.get_transaction();
-        let mut txn = txn.borrow_mut();
+        let mut txn = txn.lock().map_err(|e| {
+            PyException::new_err(format!("Mutex lock error: {:?}", e))
+        }).unwrap();
         f(&mut txn)
     }
 
-    fn get_transaction(&self) -> Rc<RefCell<YTransactionInner>> {
-        let doc = self.get_doc();
-        let txn = doc.borrow_mut().begin_transaction();
+    fn get_transaction(&self) -> Arc<Mutex<YTransactionInner>> {
+        let binding = self.get_doc();
+        let mut doc = binding.lock().map_err(|e| {
+            PyException::new_err(format!("Mutex lock error: {:?}", e))
+        }).unwrap();
+        let txn = doc.begin_transaction();
         txn
     }
 }
 
 pub struct YDocInner {
     doc: Doc,
-    txn: Option<Weak<RefCell<YTransactionInner>>>,
+    txn: Option<Weak<Mutex<YTransactionInner>>>,
 }
 
 impl YDocInner {
     pub fn has_transaction(&self) -> bool {
         if let Some(weak_txn) = &self.txn {
             if let Some(txn) = weak_txn.upgrade() {
-                return !txn.borrow().committed;
+                let guard = txn.lock().map_err(|e| {
+                    PyException::new_err(format!("Mutex lock error: {:?}", e))
+                }).unwrap();
+                return !guard.committed;
             }
         }
         false
     }
 
-    pub fn begin_transaction(&mut self) -> Rc<RefCell<YTransactionInner>> {
+    pub fn begin_transaction(&mut self) -> Arc<Mutex<YTransactionInner>> {
         // Check if we think we still have a transaction
         if let Some(weak_txn) = &self.txn {
             // And if it's actually around
             if let Some(txn) = weak_txn.upgrade() {
-                if !txn.borrow().committed {
+                let guard = txn.lock().map_err(|e| {
+                    PyException::new_err(format!("Mutex lock error: {:?}", e))
+                }).unwrap();
+                if !guard.committed {
+                    drop(guard);
                     return txn;
                 }
             }
@@ -72,15 +83,17 @@ impl YDocInner {
             std::mem::transmute::<TransactionMut, TransactionMut<'static>>(self.doc.transact_mut())
         };
         let txn = YTransactionInner::new(txn);
-        let txn = Rc::new(RefCell::new(txn));
-        self.txn = Some(Rc::downgrade(&txn));
+        let txn = Arc::new(Mutex::new(txn));
+        self.txn = Some(Arc::downgrade(&txn));
         txn
     }
 
     pub fn commit_transaction(&mut self) {
         if let Some(weak_txn) = &self.txn {
             if let Some(txn) = weak_txn.upgrade() {
-                let mut txn = txn.borrow_mut();
+                let mut txn = txn.lock().map_err(|e| {
+                    PyException::new_err(format!("Mutex lock error: {:?}", e))
+                }).unwrap();
                 txn.commit();
             }
         }
@@ -121,11 +134,14 @@ impl YDocInner {
 ///     print(output)
 /// ```
 #[pyclass(unsendable, subclass)]
-pub struct YDoc(Rc<RefCell<YDocInner>>);
+pub struct YDoc(Arc<Mutex<YDocInner>>);
 
 impl YDoc {
     pub fn guard_store(&self) -> PyResult<()> {
-        if self.0.borrow().has_transaction() {
+        let guard = self.0.lock().map_err(|e| {
+            PyException::new_err(format!("Mutex lock error: {:?}", e))
+        })?;
+        if guard.has_transaction() {
             return Err(pyo3::exceptions::PyAssertionError::new_err(
                 "Transaction already started!",
             ));
@@ -172,13 +188,16 @@ impl YDoc {
             txn: None,
         };
 
-        Ok(YDoc(Rc::new(RefCell::new(inner))))
+        Ok(YDoc(Arc::new(Mutex::new(inner))))
     }
 
     /// Gets globally unique identifier of this `YDoc` instance.
     #[getter]
     pub fn client_id(&self) -> u64 {
-        self.0.borrow().doc.client_id()
+        let guard = self.0.lock().map_err(|e| {
+            PyException::new_err(format!("Mutex lock error: {:?}", e))
+        }).unwrap();
+        guard.doc.client_id()
     }
 
     /// Returns a new transaction for this document. Ypy shared data types execute their
@@ -198,17 +217,25 @@ impl YDoc {
     ///     text.insert(txn, 0, 'hello world')
     /// ```
     pub fn begin_transaction(&self) -> YTransaction {
-        YTransaction::new(self.0.borrow_mut().begin_transaction())
+        let mut guard = self.0.lock().map_err(|e| {
+            PyException::new_err(format!("Mutex lock error: {:?}", e))
+        }).unwrap();
+        YTransaction::new(guard.begin_transaction())
     }
 
     pub fn transact(&mut self, callback: PyObject) -> PyResult<PyObject> {
-        let txn = YTransaction::new(self.0.borrow_mut().begin_transaction());
+        let mut guard = self.0.lock().map_err(|e| {
+            PyException::new_err(format!("Mutex lock error: {:?}", e))
+        })?;
+        let txn = YTransaction::new(guard.begin_transaction());
         let result = Python::with_gil(|py| {
             let args = PyTuple::new(py, vec![txn.into_py(py)]);
             callback.call(py, args, None)
         });
         // Make transaction commit after callback returns
-        let mut doc = self.0.borrow_mut();
+        let mut doc = self.0.lock().map_err(|e| {
+            PyException::new_err(format!("Mutex lock error: {:?}", e))
+        })?;
         doc.commit_transaction();
         result
     }
@@ -222,9 +249,10 @@ impl YDoc {
     /// onto `YMap` instance.
     pub fn get_map(&mut self, name: &str) -> PyResult<YMap> {
         self.guard_store()?;
-        Ok(self
-            .0
-            .borrow()
+        let guard = self.0.lock().map_err(|e| {
+            PyException::new_err(format!("Mutex lock error: {:?}", e))
+        })?;
+        Ok(guard
             .doc
             .get_or_insert_map(name)
             .with_doc(self.0.clone()))
@@ -239,9 +267,10 @@ impl YDoc {
     /// onto `YXmlFragment` instance.
     pub fn get_xml_fragment(&mut self, name: &str) -> PyResult<YXmlFragment> {
         self.guard_store()?;
-        Ok(self
-            .0
-            .borrow()
+        let guard = self.0.lock().map_err(|e| {
+            PyException::new_err(format!("Mutex lock error: {:?}", e))
+        })?;
+        Ok(guard
             .doc
             .get_or_insert_xml_fragment(name)
             .with_doc(self.0.clone()))
@@ -256,9 +285,10 @@ impl YDoc {
     /// onto `YArray` instance.
     pub fn get_array(&mut self, name: &str) -> PyResult<YArray> {
         self.guard_store()?;
-        Ok(self
-            .0
-            .borrow()
+        let guard = self.0.lock().map_err(|e| {
+            PyException::new_err(format!("Mutex lock error: {:?}", e))
+        })?;
+        Ok(guard
             .doc
             .get_or_insert_array(name)
             .with_doc(self.0.clone()))
@@ -273,9 +303,10 @@ impl YDoc {
     /// onto `YText` instance.
     pub fn get_text(&mut self, name: &str) -> PyResult<YText> {
         self.guard_store()?;
-        Ok(self
-            .0
-            .borrow()
+        let guard = self.0.lock().map_err(|e| {
+            PyException::new_err(format!("Mutex lock error: {:?}", e))
+        })?;
+        Ok(guard
             .doc
             .get_or_insert_text(name)
             .with_doc(self.0.clone()))
@@ -283,9 +314,10 @@ impl YDoc {
 
     /// Subscribes a callback to a `YDoc` lifecycle event.
     pub fn observe_after_transaction(&mut self, callback: PyObject) -> ObservationId {
-        let subscription = self
-            .0
-            .borrow()
+        let guard = self.0.lock().map_err(|e| {
+            PyException::new_err(format!("Mutex lock error: {:?}", e))
+        }).unwrap();
+        let subscription = guard
             .doc
             .observe_transaction_cleanup(move |txn, event| {
                 Python::with_gil(|py| {
@@ -322,7 +354,10 @@ impl YDoc {
 /// ```
 #[pyfunction]
 pub fn encode_state_vector(doc: &mut YDoc) -> PyObject {
-    let txn = doc.0.borrow_mut().begin_transaction();
+    let mut guard = doc.0.lock().map_err(|e| {
+        PyException::new_err(format!("Mutex lock error: {:?}", e))
+    }).unwrap();
+    let txn = guard.begin_transaction();
     let txn = YTransaction::new(txn);
     txn.state_vector_v1()
 }
@@ -349,7 +384,10 @@ pub fn encode_state_vector(doc: &mut YDoc) -> PyObject {
 /// ```
 #[pyfunction]
 pub fn encode_state_as_update(doc: &mut YDoc, vector: Option<Vec<u8>>) -> PyResult<PyObject> {
-    let txn = doc.0.borrow_mut().begin_transaction();
+    let mut guard = doc.0.lock().map_err(|e| {
+        PyException::new_err(format!("Mutex lock error: {:?}", e))
+    })?;
+    let txn = guard.begin_transaction();
     YTransaction::new(txn).diff_v1(vector)
 }
 
@@ -373,7 +411,10 @@ pub fn encode_state_as_update(doc: &mut YDoc, vector: Option<Vec<u8>>) -> PyResu
 /// ```
 #[pyfunction]
 pub fn apply_update(doc: &mut YDoc, diff: Vec<u8>) -> PyResult<()> {
-    let txn = doc.0.borrow_mut().begin_transaction();
+    let mut guard = doc.0.lock().map_err(|e| {
+        PyException::new_err(format!("Mutex lock error: {:?}", e))
+    })?;
+    let txn = guard.begin_transaction();
     YTransaction::new(txn).apply_v1(diff)?;
 
     Ok(())

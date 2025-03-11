@@ -4,12 +4,11 @@ use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
 use pyo3::types as pytypes;
 use pyo3::types::PyList;
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::convert::TryInto;
 use std::ops::Deref;
-use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 use yrs::block::Unused;
 use yrs::block::{ItemContent, Prelim};
 use yrs::branch::{Branch, BranchPtr};
@@ -95,11 +94,11 @@ impl<'a> FromPyObject<'a> for CompatiblePyType<'a> {
 }
 
 pub trait WithDocToPython {
-    fn with_doc_into_py(self, doc: Rc<RefCell<YDocInner>>, py: Python) -> PyObject;
+    fn with_doc_into_py(self, doc: Arc<Mutex<YDocInner>>, py: Python) -> PyObject;
 }
 
 impl WithDocToPython for Delta {
-    fn with_doc_into_py(self, doc: Rc<RefCell<YDocInner>>, py: Python) -> PyObject {
+    fn with_doc_into_py(self, doc: Arc<Mutex<YDocInner>>, py: Python) -> PyObject {
         let result = pytypes::PyDict::new(py);
         match self {
             Delta::Inserted(value, attrs) => {
@@ -128,7 +127,7 @@ impl WithDocToPython for Delta {
 }
 
 impl WithDocToPython for &Attrs {
-    fn with_doc_into_py(self, doc: Rc<RefCell<YDocInner>>, py: Python) -> PyObject {
+    fn with_doc_into_py(self, doc: Arc<Mutex<YDocInner>>, py: Python) -> PyObject {
         let o = pytypes::PyDict::new(py);
         for (key, value) in self.iter() {
             let key = key.as_ref();
@@ -140,7 +139,7 @@ impl WithDocToPython for &Attrs {
 }
 
 impl WithDocToPython for &Change {
-    fn with_doc_into_py(self, doc: Rc<RefCell<YDocInner>>, py: Python) -> PyObject {
+    fn with_doc_into_py(self, doc: Arc<Mutex<YDocInner>>, py: Python) -> PyObject {
         let result = pytypes::PyDict::new(py);
         match self {
             Change::Added(values) => {
@@ -164,7 +163,7 @@ impl WithDocToPython for &Change {
 pub(crate) struct PyObjectWrapper(pub TypeWithDoc<PyObject>);
 
 impl PyObjectWrapper {
-    pub fn new(inner: PyObject, doc: Rc<RefCell<YDocInner>>) -> Self {
+    pub fn new(inner: PyObject, doc: Arc<Mutex<YDocInner>>) -> Self {
         Self(TypeWithDoc::new(inner, doc))
     }
 }
@@ -418,7 +417,7 @@ impl ToPython for Any {
 }
 
 impl WithDocToPython for Out {
-    fn with_doc_into_py(self, doc: Rc<RefCell<YDocInner>>, py: Python) -> PyObject {
+    fn with_doc_into_py(self, doc: Arc<Mutex<YDocInner>>, py: Python) -> PyObject {
         match self {
             Out::Any(v) => v.into_py(py),
             Out::YText(v) => v.with_doc(doc).into_py(py),
@@ -435,7 +434,7 @@ impl WithDocToPython for Out {
 pub(crate) fn events_into_py(
     txn: &TransactionMut,
     events: &Events,
-    doc: Rc<RefCell<YDocInner>>,
+    doc: Arc<Mutex<YDocInner>>,
 ) -> PyObject {
     Python::with_gil(|py| {
         let py_events = events.iter().map(|event| match event {

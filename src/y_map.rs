@@ -2,12 +2,10 @@ use pyo3::exceptions::{PyKeyError, PyTypeError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::mem::ManuallyDrop;
 use std::ops::DerefMut;
-use std::rc::Rc;
-
+use std::sync::{Arc, Mutex};
 use yrs::types::map::{MapEvent, MapIter};
 use yrs::types::{DeepObservable, ToJson};
 use yrs::{Map, MapRef, Observable, TransactionMut};
@@ -32,7 +30,7 @@ use crate::y_transaction::{YTransaction, YTransactionInner};
 pub struct YMap(pub SharedType<TypeWithDoc<MapRef>, HashMap<String, PyObject>>);
 
 impl WithDoc<YMap> for MapRef {
-    fn with_doc(self, doc: Rc<RefCell<YDocInner>>) -> YMap {
+    fn with_doc(self, doc: Arc<Mutex<YDocInner>>) -> YMap {
         YMap(SharedType::new(TypeWithDoc::new(self, doc)))
     }
 }
@@ -555,14 +553,14 @@ impl ValueIterator {
 #[pyclass(unsendable)]
 pub struct YMapEvent {
     inner: *const MapEvent,
-    doc: Rc<RefCell<YDocInner>>,
+    doc: Arc<Mutex<YDocInner>>,
     txn: *const TransactionMut<'static>,
     target: Option<PyObject>,
     keys: Option<PyObject>,
 }
 
 impl YMapEvent {
-    pub fn new(event: &MapEvent, txn: &TransactionMut, doc: Rc<RefCell<YDocInner>>) -> Self {
+    pub fn new(event: &MapEvent, txn: &TransactionMut, doc: Arc<Mutex<YDocInner>>) -> Self {
         let inner = event as *const MapEvent;
         // HACK: get rid of lifetime
         let txn = unsafe { std::mem::transmute::<&TransactionMut, &TransactionMut<'static>>(txn) };

@@ -5,12 +5,10 @@ use crate::shared_types::{
 use crate::type_conversions::{events_into_py, WithDocToPython};
 use crate::y_doc::{WithDoc, YDocInner};
 use crate::y_transaction::{YTransaction, YTransactionInner};
-use std::cell::RefCell;
 use std::clone::Clone;
 use std::convert::{TryFrom, TryInto};
-use std::rc::Rc;
 use std::string::ToString;
-
+use std::sync::{Arc, Mutex};
 use super::shared_types::SharedType;
 use crate::type_conversions::ToPython;
 use pyo3::exceptions::PyIndexError;
@@ -44,7 +42,7 @@ use yrs::{Any, Array, ArrayRef, Assoc, Observable, TransactionMut};
 pub struct YArray(pub SharedType<TypeWithDoc<ArrayRef>, Vec<PyObject>>);
 
 impl WithDoc<YArray> for ArrayRef {
-    fn with_doc(self, doc: Rc<RefCell<YDocInner>>) -> YArray {
+    fn with_doc(self, doc: Arc<Mutex<YDocInner>>) -> YArray {
         YArray(SharedType::new(TypeWithDoc::new(self, doc.clone())))
     }
 }
@@ -507,7 +505,7 @@ impl YArray {
     pub fn insert_multiple_at(
         dst: &ArrayRef,
         txn: &mut TransactionMut,
-        doc: Rc<RefCell<YDocInner>>,
+        doc: Arc<Mutex<YDocInner>>,
         index: u32,
         src: Vec<PyObject>,
     ) -> PyResult<()> {
@@ -571,14 +569,14 @@ pub enum Index<'a> {
 #[pyclass(unsendable)]
 pub struct YArrayEvent {
     inner: *const ArrayEvent,
-    doc: Rc<RefCell<YDocInner>>,
+    doc: Arc<Mutex<YDocInner>>,
     txn: *const TransactionMut<'static>,
     target: Option<PyObject>,
     delta: Option<PyObject>,
 }
 
 impl YArrayEvent {
-    pub fn new(event: &ArrayEvent, txn: &TransactionMut, doc: Rc<RefCell<YDocInner>>) -> Self {
+    pub fn new(event: &ArrayEvent, txn: &TransactionMut, doc: Arc<Mutex<YDocInner>>) -> Self {
         let inner = event as *const ArrayEvent;
         // HACK: get rid of lifetime
         let txn = unsafe { std::mem::transmute::<&TransactionMut, &TransactionMut<'static>>(txn) };

@@ -7,11 +7,9 @@ use crate::y_doc::{WithDoc, YDocInner};
 use crate::y_transaction::{YTransaction, YTransactionInner};
 use pyo3::prelude::*;
 use pyo3::types::PyList;
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::convert::TryInto;
-use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use yrs::types::text::TextEvent;
 use yrs::types::Attrs;
 use yrs::types::DeepObservable;
@@ -35,7 +33,7 @@ use yrs::{Any, GetString, Observable, Text, TextRef, TransactionMut};
 pub struct YText(pub SharedType<TypeWithDoc<TextRef>, String>);
 
 impl WithDoc<YText> for TextRef {
-    fn with_doc(self, doc: Rc<RefCell<YDocInner>>) -> YText {
+    fn with_doc(self, doc: Arc<Mutex<YDocInner>>) -> YText {
         YText(SharedType::new(TypeWithDoc::new(self, doc)))
     }
 }
@@ -310,14 +308,14 @@ impl YText {
 #[pyclass(unsendable)]
 pub struct YTextEvent {
     inner: *const TextEvent,
-    doc: Rc<RefCell<YDocInner>>,
+    doc: Arc<Mutex<YDocInner>>,
     txn: *const TransactionMut<'static>,
     target: Option<PyObject>,
     delta: Option<PyObject>,
 }
 
 impl YTextEvent {
-    pub fn new(event: &TextEvent, txn: &TransactionMut, doc: Rc<RefCell<YDocInner>>) -> Self {
+    pub fn new(event: &TextEvent, txn: &TransactionMut, doc: Arc<Mutex<YDocInner>>) -> Self {
         let inner = event as *const TextEvent;
         // HACK: get rid of lifetime
         let txn = unsafe { std::mem::transmute::<&TransactionMut, &TransactionMut<'static>>(txn) };
