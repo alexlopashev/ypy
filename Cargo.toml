@@ -5,6 +5,7 @@ rust-version = "1.72"
 edition = "2021"
 
 [features]
+default = ["sync"]
 sync = []
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -13,8 +14,10 @@ sync = []
 name = "y_py"
 crate-type = ["cdylib"]
 
-[dependencies]
-yrs = { version = "0.22", features = ["sync"] }
+[dependencies.yrs]
+version = "0.22"
+features = ["sync"]
+default-features = false
 
 [dependencies.pyo3]
 version = "0.19.2"
