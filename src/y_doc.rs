@@ -14,7 +14,6 @@ use yrs::updates::encoder::Encode;
 use yrs::Doc;
 use yrs::OffsetKind;
 use yrs::Options;
-use yrs::sync::Error;
 use yrs::Transact;
 use yrs::TransactionCleanupEvent;
 use yrs::TransactionMut;

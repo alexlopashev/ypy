@@ -10,10 +10,8 @@ use pyo3::create_exception;
 use pyo3::types as pytypes;
 use pyo3::{exceptions::PyException, prelude::*};
 use std::{
-    cell::RefCell,
     fmt::Display,
     ops::{Deref, DerefMut},
-    rc::Rc,
 };
 use std::sync::{Arc, Mutex};
 use yrs::types::TypeRef;

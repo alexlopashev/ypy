@@ -12,7 +12,6 @@ use yrs::{
     StateVector, Update,
 };
 use yrs::{ReadTxn, TransactionMut};
-use yrs::sync::Error;
 
 create_exception!(
     y_py,
