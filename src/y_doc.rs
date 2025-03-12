@@ -50,6 +50,9 @@ pub struct YDocInner {
     txn: Option<Weak<Mutex<YTransactionInner>>>,
 }
 
+unsafe impl Send for YDocInner {}
+unsafe impl Sync for YDocInner {}
+
 impl YDocInner {
     pub fn has_transaction(&self) -> bool {
         if let Some(weak_txn) = &self.txn {
@@ -135,6 +138,9 @@ impl YDocInner {
 #[pyclass(unsendable, subclass)]
 pub struct YDoc(Arc<Mutex<YDocInner>>);
 
+unsafe impl Send for YDoc {}
+unsafe impl Sync for YDoc {}
+
 impl YDoc {
     pub fn guard_store(&self) -> PyResult<()> {
         let guard = self.0.lock().map_err(|e| {
@@ -148,8 +154,6 @@ impl YDoc {
         Ok(())
     }
 }
-
-unsafe impl Send for YDoc {}
 
 #[pymethods]
 impl YDoc {
