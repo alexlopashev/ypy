@@ -149,6 +149,8 @@ impl YDoc {
     }
 }
 
+unsafe impl Send for YDoc {}
+
 #[pymethods]
 impl YDoc {
     /// Creates a new Ypy document. If `client_id` parameter was passed it will be used as this
